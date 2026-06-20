@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Riftbound Scanner</title>
+<style>
+:root {
+  --bg:#0d0d1a; --surface:#16162a; --surface2:#1f1f38; --border:#2e2e52;
+  --gold:#e8c84a; --gold-dim:#a88c2e; --teal:#3dd6c8; --teal-dim:#1e8a80;
+  --foil:#c084fc; --foil-dim:#7c3aed; --text:#e2e2f0; --muted:#8888aa;
+  --success:#34d399; --danger:#f87171; --r:12px;
+  --common:#9ca3af; --uncommon:#60a5fa; --rare:#fbbf24; --legendary:#f472b6;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
+  min-height:100dvh;display:flex;flex-direction:column;overflow-x:hidden}
+
+/* SETUP SCREEN */
+#setupScreen{position:fixed;inset:0;z-index:1000;background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:28px;gap:20px;text-align:center}
+#setupScreen h1{color:var(--gold);font-size:1.4rem;display:flex;align-items:center;gap:10px}
+#setupScreen p{color:var(--muted);font-size:.88rem;line-height:1.6;max-width:340px}
+#setupScreen input{width:100%;padding:13px 16px;background:var(--surface2);
+  border:1px solid var(--border);border-radius:var(--r);color:var(--text);
+  font-size:.95rem;outline:none}
+#setupScreen input:focus{border-color:var(--gold-dim)}
+.btn{display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:13px;border:none;border-radius:var(--r);font-size:.9rem;
+  font-weight:700;letter-spacing:.03em;cursor:pointer;
+  transition:opacity .15s,transform .1s;width:100%}
+.btn:active{transform:scale(.97);opacity:.85}
+.btn:disabled{opacity:.4;cursor:default}
+.btn-gold{background:var(--gold);color:#0d0d1a}
+.btn-teal{background:var(--teal);color:#0d0d1a}
+.btn-surface{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-danger{background:var(--danger);color:#fff}
+
+/* HEADER */
+header{display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px 10px;border-bottom:1px solid var(--border);
+  background:var(--surface);position:sticky;top:0;z-index:100}
+.logo{font-size:1.05rem;font-weight:700;letter-spacing:.04em;color:var(--gold);
+  display:flex;align-items:center;gap:8px}
+#hStatus{font-size:.72rem;color:var(--muted)}
+
+/* TABS */
+.tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border)}
+.tab{flex:1;padding:11px 0;text-align:center;font-size:.82rem;font-weight:600;
+  color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;
+  transition:color .2s,border-color .2s}
+.tab.active{color:var(--gold);border-color:var(--gold)}
+
+/* VIEWS */
+.view{display:none;flex-direction:column;flex:1}
+.view.active{display:flex}
+
+/* CAMERA AREA */
+.cam-wrap{position:relative;width:100%;background:#000;overflow:hidden;
+  aspect-ratio:3/4;max-height:52vh}
+#video{width:100%;height:100%;object-fit:cover;display:block}
+#canvas{display:none}
+.overlay{position:absolute;inset:0;pointer-events:none;
+  display:flex;align-items:center;justify-content:center}
+.frame{width:80%;aspect-ratio:5/7;border:2px solid var(--gold);border-radius:8px;
+  box-shadow:0 0 0 2000px rgba(0,0,0,.45);position:relative}
+.frame::before,.frame::after,.frame .br,.frame .bl{
+  content:"";position:absolute;width:22px;height:22px;border-color:var(--gold);border-style:solid}
+.frame::before{top:-2px;left:-2px;border-width:3px 0 0 3px;border-radius:4px 0 0 0}
+.frame::after{top:-2px;right:-2px;border-width:3px 3px 0 0;border-radius:0 4px 0 0}
+.frame .br{bottom:-2px;right:-2px;border-width:0 3px 3px 0;border-radius:0 0 4px 0}
+.frame .bl{bottom:-2px;left:-2px;border-width:0 0 3px 3px;border-radius:0 0 0 4px}
+.scanline{position:absolute;left:0;right:0;top:0;height:2px;opacity:0;
+  background:linear-gradient(90deg,transparent,var(--teal),transparent);
+  animation:sweep 2s linear infinite;transition:opacity .3s}
+.scanning .scanline{opacity:1}
+@keyframes sweep{0%{top:0}100%{top:100%}}
+#camStatus{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.75);font-size:.72rem;padding:4px 14px;
+  border-radius:20px;white-space:nowrap;letter-spacing:.04em;color:var(--muted)}
+#camStatus.ready{color:var(--teal)}
+#camStatus.ok{color:var(--success)}
+#camStatus.err{color:var(--danger)}
+
+/* FOIL BAR */
+.foil-bar{padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:10px}
+.foil-bar label{font-size:.78rem;color:var(--muted);flex:1}
+.foil-bar label b{color:var(--text)}
+.toggle-pill{display:flex;background:var(--bg);border:1px solid var(--border);
+  border-radius:20px;overflow:hidden;font-size:.78rem;font-weight:700}
+.toggle-pill button{padding:6px 14px;background:transparent;border:none;
+  color:var(--muted);cursor:pointer;transition:all .2s;letter-spacing:.04em}
+.toggle-pill button.on-nf{background:var(--teal-dim);color:#fff}
+.toggle-pill button.on-f{background:var(--foil-dim);color:#fff}
+
+/* SCAN CONTROLS */
+.scan-ctrls{padding:10px 14px;display:flex;gap:8px}
+.scan-ctrls .btn{font-size:.85rem}
+
+/* MANUAL PANEL */
+.manual-panel{margin:0 14px 10px;background:var(--surface2);
+  border:1px solid var(--border);border-radius:var(--r);display:none;overflow:hidden}
+.manual-panel.open{display:block}
+.manual-panel input,.manual-panel select{width:100%;padding:11px 14px;
+  background:transparent;border:none;border-bottom:1px solid var(--border);
+  color:var(--text);font-size:.9rem;outline:none}
+.manual-panel select option{background:var(--surface2)}
+.manual-panel .mfooter{display:flex;gap:8px;padding:8px}
+
+/* RECENT */
+.recent{flex:1;overflow-y:auto;padding:10px 14px}
+.sec-label{font-size:.68rem;font-weight:700;letter-spacing:.1em;
+  color:var(--muted);text-transform:uppercase;margin-bottom:8px}
+.card-row{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);padding:10px 12px;margin-bottom:7px;
+  display:flex;align-items:center;gap:10px;animation:si .2s ease}
+@keyframes si{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.dot.Common{background:var(--common)}.dot.Uncommon{background:var(--uncommon)}
+.dot.Rare{background:var(--rare)}.dot.Legendary{background:var(--legendary)}
+.dot.Unknown{background:var(--border)}
+.cinfo{flex:1;min-width:0}
+.cname{font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmeta{font-size:.72rem;color:var(--muted);margin-top:2px}
+.fbadge{font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;
+  white-space:nowrap}
+.fbadge.foil{background:var(--foil-dim);color:#e9d5ff}
+.fbadge.nf{background:var(--teal-dim);color:#ccfbf1}
+
+/* INVENTORY */
+#view-inventory{overflow:hidden}
+.inv-bar{padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;gap:8px}
+.inv-search{flex:1;background:var(--bg);border:1px solid var(--border);
+  border-radius:8px;padding:8px 12px;color:var(--text);font-size:.88rem;outline:none}
+.inv-filter{background:var(--bg);border:1px solid var(--border);
+  border-radius:8px;padding:8px 10px;color:var(--text);font-size:.78rem;outline:none}
+.inv-list{flex:1;overflow-y:auto;padding:10px 14px}
+.inv-empty{text-align:center;color:var(--muted);font-size:.88rem;margin-top:40px}
+.inv-item{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);padding:10px 12px;margin-bottom:7px;
+  display:flex;align-items:center;gap:10px}
+.iinfo{flex:1;min-width:0}
+.iname{font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.imeta{font-size:.72rem;color:var(--muted);margin-top:2px}
+.qty{font-size:.8rem;font-weight:800;min-width:30px;height:30px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:8px;color:var(--gold)}
+.inv-stats{padding:8px 14px;border-top:1px solid var(--border);
+  background:var(--surface);display:flex;gap:14px;font-size:.75rem;color:var(--muted)}
+.inv-stats b{color:var(--gold)}
+
+/* SETTINGS */
+.settings-body{padding:14px;display:flex;flex-direction:column;gap:12px;overflow-y:auto}
+.scard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.srow{padding:12px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.srow:last-child{border-bottom:none}
+.slabel{flex:1;font-size:.88rem}
+.ssub{font-size:.72rem;color:var(--muted);margin-top:2px;line-height:1.4}
+.srow input[type=text],.srow input[type=number]{
+  background:var(--bg);border:1px solid var(--border);border-radius:6px;
+  padding:7px 10px;color:var(--text);font-size:.82rem;width:110px;outline:none}
+.sw{position:relative;width:42px;height:23px}
+.sw input{opacity:0;width:0;height:0}
+.sw .sl{position:absolute;inset:0;background:var(--border);border-radius:12px;
+  transition:background .2s;cursor:pointer}
+.sw .sl::before{content:"";position:absolute;width:17px;height:17px;
+  left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s}
+.sw input:checked+.sl{background:var(--teal-dim)}
+.sw input:checked+.sl::before{transform:translateX(19px)}
+.full-input{width:100%;padding:11px 14px;background:var(--bg);
+  border:none;border-bottom:1px solid var(--border);
+  color:var(--text);font-size:.88rem;outline:none}
+.full-input:focus{border-color:var(--gold-dim)}
+
+/* CONFIRM SHEET */
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.cf-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.85);
+  display:flex;align-items:flex-end}
+.cf-sheet{background:var(--surface);border-radius:20px 20px 0 0;
+  border-top:2px solid var(--gold);padding:18px 18px 28px;width:100%;
+  animation:slideUp .2s ease}
+.cf-title{font-size:.68rem;letter-spacing:.1em;color:var(--muted);
+  text-transform:uppercase;margin-bottom:10px}
+.cf-fields{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.cf-fields input,.cf-fields select{background:var(--bg);border:1px solid var(--border);
+  border-radius:8px;padding:10px 12px;color:var(--text);font-size:.9rem;outline:none;width:100%}
+.cf-fields .row2{display:flex;gap:8px}
+.cf-fields .row2 input,.cf-fields .row2 select{flex:1}
+.cf-foil-row{display:flex;gap:8px}
+.cf-foil-row .btn{font-size:.82rem}
+.cf-actions{display:flex;gap:8px;margin-top:14px}
+
+/* TOAST */
+#toast{position:fixed;top:68px;left:50%;transform:translateX(-50%) translateY(-8px);
+  background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  padding:9px 18px;border-radius:22px;font-size:.82rem;font-weight:600;
+  z-index:999;opacity:0;transition:opacity .2s,transform .2s;
+  white-space:nowrap;pointer-events:none;max-width:92vw}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.ok{border-color:var(--success);color:var(--success)}
+#toast.err{border-color:var(--danger);color:var(--danger)}
+
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.2);
+  border-top-color:var(--gold);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- ═══ SETUP SCREEN (shown until API URL is saved) ═══ -->
+<div id="setupScreen">
+  <h1>
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5"/>
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>
+    </svg>
+    Riftbound Scanner
+  </h1>
+  <p>Paste your <strong style="color:var(--text)">Apps Script Web App URL</strong> to connect to your Google Sheet inventory.</p>
+  <input id="setupUrl" type="text" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+  <button class="btn btn-gold" onclick="saveSetup()">Connect →</button>
+  <p style="font-size:.75rem">You only need to do this once. The URL is saved locally on your phone.</p>
+</div>
+
+<!-- ═══ MAIN APP ═══ -->
+<header>
+  <div class="logo">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5"/>
+      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>
+    </svg>
+    Riftbound
+  </div>
+  <div id="hStatus">●&nbsp;connected</div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="tab('scan')">📷 Scan</div>
+  <div class="tab" onclick="tab('inventory')">📦 Inventory</div>
+  <div class="tab" onclick="tab('settings')">⚙️ Settings</div>
+</div>
+
+<!-- ══════ SCAN ══════ -->
+<div id="view-scan" class="view active">
+  <div class="cam-wrap" id="camWrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="overlay">
+      <div class="frame" id="frame">
+        <div class="br"></div><div class="bl"></div>
+        <div class="scanline" id="scanline"></div>
+      </div>
+    </div>
+    <div id="camStatus">Tap Start Scanning</div>
+  </div>
+
+  <div class="foil-bar">
+    <label>Batch: <b id="foilLabel">Non-Foil</b></label>
+    <div class="toggle-pill">
+      <button id="btnNF" class="on-nf" onclick="setFoil(false)">NON-FOIL</button>
+      <button id="btnF"  onclick="setFoil(true)">FOIL ✨</button>
+    </div>
+  </div>
+
+  <div class="scan-ctrls">
+    <button class="btn btn-gold" id="btnScan" onclick="toggleScan()" style="flex:2">
+      ▶ Start Scanning
+    </button>
+    <button class="btn btn-surface" onclick="toggleManual()" style="flex:1">Manual</button>
+  </div>
+
+  <div class="manual-panel" id="manualPanel">
+    <input type="text"   id="mName"   placeholder="Card name…">
+    <input type="text"   id="mSet"    placeholder="Set (e.g. RB-1)">
+    <select id="mRarity">
+      <option>Common</option><option>Uncommon</option>
+      <option>Rare</option><option>Legendary</option>
+    </select>
+    <div class="mfooter">
+      <button class="btn btn-teal" style="font-size:.82rem" onclick="submitManual()">Add Card</button>
+      <button class="btn btn-surface" style="flex:0;padding:13px 14px;font-size:.82rem" onclick="toggleManual()">✕</button>
+    </div>
+  </div>
+
+  <div class="recent">
+    <div class="sec-label">Recent Scans</div>
+    <div id="recentList"><div style="color:var(--muted);font-size:.82rem">No scans yet</div></div>
+  </div>
+</div>
+
+<!-- ══════ INVENTORY ══════ -->
+<div id="view-inventory" class="view">
+  <div class="inv-bar">
+    <input class="inv-search" id="invQ" type="search" placeholder="Search…" oninput="filterInv()">
+    <select class="inv-filter" id="invR" onchange="filterInv()">
+      <option value="">All</option>
+      <option>Common</option><option>Uncommon</option>
+      <option>Rare</option><option>Legendary</option>
+    </select>
+  </div>
+  <div class="inv-list" id="invList"><div class="inv-empty">Loading…</div></div>
+  <div class="inv-stats" id="invStats" style="display:none">
+    Cards: <b id="sTotal">0</b> &nbsp; Unique: <b id="sUniq">0</b> &nbsp; Foil: <b id="sFoil">0</b>
+  </div>
+</div>
+
+<!-- ══════ SETTINGS ══════ -->
+<div id="view-settings" class="view">
+  <div class="settings-body">
+    <div class="scard">
+      <div class="srow" style="flex-direction:column;align-items:flex-start;gap:4px">
+        <div class="slabel">Apps Script URL</div>
+        <div class="ssub">Update if you redeploy your script</div>
+      </div>
+      <input class="full-input" id="sUrl" type="text" placeholder="https://script.google.com/…">
+      <div class="srow"><button class="btn btn-surface" style="font-size:.82rem" onclick="updateUrl()">Save URL</button></div>
+    </div>
+
+    <div class="scard">
+      <div class="srow" style="flex-direction:column;align-items:flex-start;gap:4px">
+        <div class="slabel">Vision API Key (optional)</div>
+        <div class="ssub">Enables automatic OCR. Without it, use Manual entry.</div>
+      </div>
+      <input class="full-input" id="sKey" type="text" placeholder="AIza…">
+      <div class="srow"><button class="btn btn-surface" style="font-size:.82rem" onclick="saveKey()">Save Key to Sheet</button></div>
+    </div>
+
+    <div class="scard">
+      <div class="srow">
+        <div><div class="slabel">Scan interval (ms)</div><div class="ssub">1500–3000 recommended</div></div>
+        <input type="number" id="sInterval" value="2000" min="500" max="5000" step="500">
+      </div>
+      <div class="srow">
+        <div><div class="slabel">Confirm each scan</div><div class="ssub">Review before adding</div></div>
+        <label class="sw"><input type="checkbox" id="sConfirm" checked><span class="sl"></span></label>
+      </div>
+      <div class="srow">
+        <div><div class="slabel">Sound on scan</div></div>
+        <label class="sw"><input type="checkbox" id="sSound" checked><span class="sl"></span></label>
+      </div>
+    </div>
+
+    <div class="scard">
+      <div class="srow">
+        <div><div class="slabel">How to use</div></div>
+      </div>
+      <div class="srow" style="flex-direction:column;align-items:flex-start">
+        <div class="ssub" style="line-height:1.7">
+          1. Set Foil / Non-Foil toggle before scanning Commons &amp; Uncommons.<br>
+          2. Tap <b style="color:var(--text)">Start Scanning</b> — camera activates.<br>
+          3. Slide each card into your stand, name facing the camera.<br>
+          4. App captures frames and reads card text via OCR.<br>
+          5. Confirm the card name before it's saved.<br>
+          6. Rares &amp; Legendaries always prompt for foil individually.<br>
+          7. Tap <b style="color:var(--text)">Stop Scanning</b> when done.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════════════
+//  CONFIG & STATE
+// ══════════════════════════════════════════════════════
+var API_URL      = localStorage.getItem("rb_api_url") || "";
+var stream       = null;
+var scanning     = false;
+var scanTimer    = null;
+var foilMode     = false;
+var inventory    = [];
+var recentScans  = [];
+var pendingCF    = null;
+
+// ── Init ────────────────────────────────────────────
+(function init() {
+  if (API_URL) {
+    document.getElementById("setupScreen").style.display = "none";
+    document.getElementById("sUrl").value = API_URL;
+  }
+})();
+
+// ══════════════════════════════════════════════════════
+//  SETUP
+// ══════════════════════════════════════════════════════
+function saveSetup() {
+  var url = document.getElementById("setupUrl").value.trim();
+  if (!url || !url.startsWith("http")) { toast("Paste a valid URL", "err"); return; }
+  API_URL = url;
+  localStorage.setItem("rb_api_url", url);
+  document.getElementById("sUrl").value = url;
+  document.getElementById("setupScreen").style.display = "none";
+}
+
+function updateUrl() {
+  var url = document.getElementById("sUrl").value.trim();
+  if (!url) return;
+  API_URL = url;
+  localStorage.setItem("rb_api_url", url);
+  toast("URL saved", "ok");
+}
+
+// ══════════════════════════════════════════════════════
+//  API CALLS  (fetch → Apps Script REST)
+// ══════════════════════════════════════════════════════
+function apiFetch(body) {
+  return fetch(API_URL, {
+    method:  "POST",
+    body:    JSON.stringify(body),
+    // No custom Content-Type — avoids CORS preflight with Apps Script
+  }).then(function(r){ return r.json(); });
+}
+
+function apiGet(params) {
+  var qs = Object.keys(params).map(function(k){
+    return encodeURIComponent(k)+"="+encodeURIComponent(params[k]);
+  }).join("&");
+  return fetch(API_URL + "?" + qs).then(function(r){ return r.json(); });
+}
+
+// ══════════════════════════════════════════════════════
+//  TABS
+// ══════════════════════════════════════════════════════
+function tab(name) {
+  document.querySelectorAll(".tab").forEach(function(t,i){
+    t.classList.toggle("active", ["scan","inventory","settings"][i] === name);
+  });
+  document.querySelectorAll(".view").forEach(function(v){ v.classList.remove("active"); });
+  document.getElementById("view-"+name).classList.add("active");
+  if (name === "inventory") loadInv();
+}
+
+// ══════════════════════════════════════════════════════
+//  FOIL TOGGLE
+// ══════════════════════════════════════════════════════
+function setFoil(f) {
+  foilMode = f;
+  document.getElementById("foilLabel").textContent = f ? "Foil ✨" : "Non-Foil";
+  document.getElementById("btnF").className  = f ? "on-f"  : "";
+  document.getElementById("btnNF").className = f ? "" : "on-nf";
+}
+
+// ══════════════════════════════════════════════════════
+//  CAMERA
+// ══════════════════════════════════════════════════════
+function startCam(cb) {
+  if (stream) { cb(); return; }
+  st("", '<span class="spinner"></span> Starting camera…');
+  document.getElementById("btnScan").disabled = true;
+
+  navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:"environment"} }, audio:false })
+  .then(function(s) {
+    stream = s;
+    var v = document.getElementById("video");
+    v.srcObject = s;
+    v.onloadedmetadata = function(){ v.play(); document.getElementById("btnScan").disabled = false; cb(); };
+  })
+  .catch(function(e) {
+    document.getElementById("btnScan").disabled = false;
+    var msg = e.name === "NotAllowedError" ? "Camera permission denied — check browser settings"
+            : e.name === "NotFoundError"   ? "No camera found"
+            : "Camera error: " + e.message;
+    st("err", "⚠ " + msg);
+    toast(msg, "err");
+  });
+}
+
+function stopCam() {
+  if (stream){ stream.getTracks().forEach(function(t){t.stop();}); stream=null; }
+  document.getElementById("video").srcObject = null;
+}
+
+// ══════════════════════════════════════════════════════
+//  SCAN LOOP
+// ══════════════════════════════════════════════════════
+function toggleScan() {
+  if (scanning) { stopScan(); return; }
+  startCam(function() {
+    scanning = true;
+    document.getElementById("btnScan").textContent = "⏹ Stop Scanning";
+    document.getElementById("btnScan").className = "btn btn-danger";
+    document.getElementById("frame").classList.add("scanning");
+    st("ready", "Waiting for card…");
+    var iv = parseInt(document.getElementById("sInterval").value) || 2000;
+    scanTimer = setInterval(captureFrame, iv);
+  });
+}
+
+function stopScan() {
+  scanning = false;
+  clearInterval(scanTimer);
+  stopCam();
+  document.getElementById("btnScan").textContent = "▶ Start Scanning";
+  document.getElementById("btnScan").className = "btn btn-gold";
+  document.getElementById("frame").classList.remove("scanning");
+  st("", "Tap Start Scanning");
+}
+
+function captureFrame() {
+  var v = document.getElementById("video");
+  var c = document.getElementById("canvas");
+  if (!v.videoWidth) return;
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext("2d").drawImage(v,0,0);
+
+  // Crop to frame area
+  var fw = c.width*.80, fh = fw*(7/5);
+  var fx = (c.width-fw)/2, fy = (c.height-fh)/2;
+  var crop = document.createElement("canvas");
+  crop.width=fw; crop.height=fh;
+  crop.getContext("2d").drawImage(c, fx,fy,fw,fh, 0,0,fw,fh);
+  var b64 = crop.toDataURL("image/jpeg",.82).split(",")[1];
+
+  st("", '<span class="spinner"></span> Reading…');
+  clearInterval(scanTimer); // pause while waiting
+
+  apiFetch({ action:"processImage", image:b64 })
+  .then(function(res){ onDetect(res); })
+  .catch(function(e){ st("err","API error: "+e.message); resumeScan(); });
+}
+
+function resumeScan() {
+  if (scanning) {
+    var iv = parseInt(document.getElementById("sInterval").value)||2000;
+    scanTimer = setInterval(captureFrame, iv);
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  CARD DETECTED
+// ══════════════════════════════════════════════════════
+function onDetect(res) {
+  if (!res.success) {
+    if (res.manualEntry) {
+      st("err","No OCR key — use Manual");
+      toggleManual(); stopScan(); return;
+    }
+    st("err", res.error || "Nothing detected");
+    resumeScan(); return;
+  }
+  if (!res.name) { st("ready","No card name — reposition"); resumeScan(); return; }
+
+  var rl = (res.rarity||"").toLowerCase();
+  var isBatch = rl==="common"||rl==="uncommon"||rl==="";
+
+  pendingCF = { name:res.name, set:res.set||"Riftbound", rarity:res.rarity||"Unknown",
+                foil: isBatch ? foilMode : null };
+
+  if (document.getElementById("sConfirm").checked) {
+    showCF(!isBatch); // ask foil individually for Rare/Legendary
+  } else {
+    if (!isBatch) pendingCF.foil = false; // default non-foil for unconfirmed rare
+    commit(pendingCF);
+    resumeScan();
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  CONFIRM SHEET
+// ══════════════════════════════════════════════════════
+function showCF(askFoil) {
+  var c = pendingCF;
+  var foilHtml = askFoil
+    ? '<div class="cf-foil-row">'
+      + '<button class="btn btn-surface" id="cfNF" onclick="cfFoil(false)" style="font-size:.82rem">Non-Foil</button>'
+      + '<button class="btn btn-surface" id="cfF"  onclick="cfFoil(true)"  style="font-size:.82rem">Foil ✨</button>'
+      + '</div>'
+    : '<div style="font-size:.8rem;color:var(--muted)">Foil: <b style="color:'+(c.foil?'var(--foil)':'var(--teal)')+'">'+
+      (c.foil?'Foil ✨':'Non-Foil')+'</b> (from batch toggle)</div>';
+
+  var el = document.createElement("div");
+  el.id = "cfOverlay";
+  el.className = "cf-overlay";
+  el.innerHTML =
+    '<div class="cf-sheet">'
+    + '<div class="cf-title">Card Detected</div>'
+    + '<div class="cf-fields">'
+    + '<input id="cfName" type="text" value="'+esc(c.name)+'" placeholder="Card name">'
+    + '<div class="row2">'
+    + '<input id="cfSet" type="text" value="'+esc(c.set)+'" placeholder="Set">'
+    + '<select id="cfRar">'+["Common","Uncommon","Rare","Legendary","Unknown"].map(function(r){
+        return '<option'+(r===c.rarity?' selected':'')+'>'+r+'</option>';
+      }).join("")+'</select>'
+    + '</div>'
+    + foilHtml
+    + '</div>'
+    + '<div class="cf-actions">'
+    + '<button class="btn btn-gold" style="flex:2" onclick="cfOK()">Add to Inventory</button>'
+    + '<button class="btn btn-surface" style="flex:1;font-size:.82rem" onclick="cfSkip()">Skip</button>'
+    + '</div></div>';
+  document.body.appendChild(el);
+
+  if (askFoil) cfFoil(false); // default non-foil
+}
+
+var _cfFoil = false;
+function cfFoil(v) {
+  _cfFoil = v;
+  var f = document.getElementById("cfF");
+  var nf = document.getElementById("cfNF");
+  if (!f||!nf) return;
+  f.style.background  =  v ? "var(--foil-dim)" : ""; f.style.color  =  v ? "#e9d5ff" : "";
+  nf.style.background = !v ? "var(--teal-dim)" : ""; nf.style.color = !v ? "#ccfbf1" : "";
+}
+
+function cfOK() {
+  var name = document.getElementById("cfName").value.trim();
+  var set  = document.getElementById("cfSet").value.trim();
+  var rar  = document.getElementById("cfRar").value;
+  var foil = (pendingCF.foil !== null) ? pendingCF.foil : _cfFoil;
+  document.getElementById("cfOverlay").remove();
+  if (name) commit({ name:name, set:set, rarity:rar, foil:foil });
+  resumeScan();
+}
+function cfSkip() {
+  document.getElementById("cfOverlay").remove();
+  st("ready","Skipped — waiting…"); resumeScan();
+}
+
+// ══════════════════════════════════════════════════════
+//  COMMIT CARD
+// ══════════════════════════════════════════════════════
+function commit(card) {
+  st("", '<span class="spinner"></span> Saving…');
+  apiFetch({ action:"addCard", name:card.name, set:card.set, rarity:card.rarity, foil:card.foil })
+  .then(function(res) {
+    if (!res.success) { toast(res.error||"Save failed","err"); return; }
+    var lbl = res.action==="added"?"Added":"Updated";
+    toast(lbl+": "+card.name+" (×"+res.qty+")","ok");
+    st("ready","Waiting for card…");
+    if (document.getElementById("sSound").checked) beep();
+    addRecent(card, res.qty);
+  })
+  .catch(function(e){ toast("Save failed: "+e.message,"err"); });
+}
+
+// ══════════════════════════════════════════════════════
+//  MANUAL ENTRY
+// ══════════════════════════════════════════════════════
+function toggleManual() {
+  var p = document.getElementById("manualPanel");
+  p.classList.toggle("open");
+  if (p.classList.contains("open")) document.getElementById("mName").focus();
+}
+
+function submitManual() {
+  var name = document.getElementById("mName").value.trim();
+  var set  = document.getElementById("mSet").value.trim()||"Unknown";
+  var rar  = document.getElementById("mRarity").value;
+  if (!name) { toast("Enter a card name","err"); return; }
+  var f = ["common","uncommon"].indexOf(rar.toLowerCase()) > -1 ? foilMode : false;
+  commit({ name:name, set:set, rarity:rar, foil:f });
+  document.getElementById("mName").value = "";
+  toggleManual();
+}
+
+// ══════════════════════════════════════════════════════
+//  RECENT
+// ══════════════════════════════════════════════════════
+function addRecent(card, qty) {
+  recentScans.unshift({ name:card.name, set:card.set, rarity:card.rarity, foil:card.foil, qty:qty });
+  if (recentScans.length > 20) recentScans.pop();
+  renderRecent();
+}
+
+function renderRecent() {
+  var el = document.getElementById("recentList");
+  if (!recentScans.length) { el.innerHTML='<div style="color:var(--muted);font-size:.82rem">No scans yet</div>'; return; }
+  el.innerHTML = recentScans.map(function(c) {
+    return '<div class="card-row">'
+      +'<div class="dot '+(c.rarity||"Unknown")+'"></div>'
+      +'<div class="cinfo"><div class="cname">'+esc(c.name)+'</div>'
+      +'<div class="cmeta">'+esc(c.set)+' · '+(c.rarity||"?")+' · ×'+c.qty+'</div></div>'
+      +'<div class="fbadge '+(c.foil?'foil':'nf')+'">'+(c.foil?'FOIL':'NRML')+'</div>'
+      +'</div>';
+  }).join("");
+}
+
+// ══════════════════════════════════════════════════════
+//  INVENTORY
+// ══════════════════════════════════════════════════════
+function loadInv() {
+  document.getElementById("invList").innerHTML='<div class="inv-empty">Loading…</div>';
+  apiGet({ action:"inventory" })
+  .then(function(data){ inventory=data; renderInv(data); })
+  .catch(function(e){ document.getElementById("invList").innerHTML='<div class="inv-empty">'+e.message+'</div>'; });
+}
+
+function renderInv(data) {
+  var el = document.getElementById("invList");
+  if (!data.length) { el.innerHTML='<div class="inv-empty">No cards yet — start scanning!</div>';
+    document.getElementById("invStats").style.display="none"; return; }
+  el.innerHTML = data.map(function(c){
+    return '<div class="inv-item">'
+      +'<div class="dot '+(c.rarity||"Unknown")+'"></div>'
+      +'<div class="iinfo"><div class="iname">'+esc(String(c.name))+'</div>'
+      +'<div class="imeta">'+esc(String(c.set))+' · '+(c.rarity||"?")+' · '+(c.foil==="Yes"?"Foil ✨":"Non-Foil")+'</div></div>'
+      +'<div class="qty">'+c.qty+'</div>'
+      +'</div>';
+  }).join("");
+  var total = data.reduce(function(s,c){return s+Number(c.qty);},0);
+  var foils = data.filter(function(c){return c.foil==="Yes";}).reduce(function(s,c){return s+Number(c.qty);},0);
+  document.getElementById("sTotal").textContent=total;
+  document.getElementById("sUniq").textContent=data.length;
+  document.getElementById("sFoil").textContent=foils;
+  document.getElementById("invStats").style.display="flex";
+}
+
+function filterInv() {
+  var q = document.getElementById("invQ").value.toLowerCase();
+  var r = document.getElementById("invR").value;
+  renderInv(inventory.filter(function(c){
+    return (!q||String(c.name).toLowerCase().includes(q)||String(c.set).toLowerCase().includes(q))
+        && (!r||c.rarity===r);
+  }));
+}
+
+// ══════════════════════════════════════════════════════
+//  SETTINGS
+// ══════════════════════════════════════════════════════
+function saveKey() {
+  var k = document.getElementById("sKey").value.trim();
+  if (!k) return;
+  apiFetch({ action:"saveKey", key:k })
+  .then(function(){ toast("API key saved","ok"); })
+  .catch(function(e){ toast(e.message,"err"); });
+}
+
+// ══════════════════════════════════════════════════════
+//  UTILS
+// ══════════════════════════════════════════════════════
+function st(cls, html) {
+  var el = document.getElementById("camStatus");
+  el.className = cls ? "scan-status "+cls : "scan-status";
+  // camStatus doesn't have id-based class, just inline:
+  el.id = "camStatus";
+  el.className = cls || "";
+  el.innerHTML = html;
+}
+
+function toast(msg, type) {
+  var el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "show"+(type?" "+type:"");
+  clearTimeout(el._t);
+  el._t = setTimeout(function(){ el.className=""; }, 3200);
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function beep() {
+  try {
+    var ctx = new (window.AudioContext||window.webkitAudioContext)();
+    var o=ctx.createOscillator(), g=ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value=880;
+    g.gain.setValueAtTime(.3,ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.18);
+    o.start(); o.stop(ctx.currentTime+.18);
+  } catch(e){}
+}
+</script>
+</body>
+</html>
