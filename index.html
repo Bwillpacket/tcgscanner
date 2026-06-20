@@ -319,8 +319,12 @@ header{display:flex;align-items:center;justify-content:space-between;
         <div class="slabel">Apps Script URL</div>
         <div class="ssub">Update if you redeploy your script</div>
       </div>
-      <input class="full-input" id="sUrl" type="text" placeholder="https://script.google.com/…">
-      <div class="srow"><button class="btn btn-surface" style="font-size:.82rem" onclick="updateUrl()">Save URL</button></div>
+      <input class="full-input" id="sUrl" type="text" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="srow" style="gap:10px;flex-wrap:wrap">
+        <button class="btn btn-surface" style="flex:0;white-space:nowrap;padding:10px 14px;font-size:.82rem" onclick="updateUrl()">Save URL</button>
+        <button class="btn btn-teal"    style="flex:0;white-space:nowrap;padding:10px 14px;font-size:.82rem" onclick="testConnection()">Test Connection</button>
+      </div>
+      <div id="connDebug" style="padding:10px 14px;font-size:.75rem;color:var(--muted);line-height:1.6;display:none;border-top:1px solid var(--border);word-break:break-all"></div>
     </div>
 
     <div class="scard">
@@ -416,6 +420,90 @@ function updateUrl() {
   API_URL = url;
   localStorage.setItem("rb_api_url", url);
   toast("URL saved", "ok");
+}
+
+function testConnection() {
+  var url = document.getElementById("sUrl").value.trim();
+  var dbg = document.getElementById("connDebug");
+  dbg.style.display = "block";
+
+  if (!url) {
+    dbg.style.color = "var(--danger)";
+    dbg.textContent = "❌ No URL entered. Paste your Apps Script /exec URL above.";
+    return;
+  }
+  if (!url.includes("script.google.com")) {
+    dbg.style.color = "var(--danger)";
+    dbg.textContent = "❌ URL doesn't look right. Should start with: https://script.google.com/macros/s/…/exec";
+    return;
+  }
+  if (!url.endsWith("/exec") && !url.includes("/exec?")) {
+    dbg.style.color = "var(--danger)";
+    dbg.textContent = "❌ URL must end with /exec — you may have copied the /edit URL instead.";
+    return;
+  }
+
+  dbg.style.color = "var(--muted)";
+  dbg.textContent = "⏳ Testing… (up to 15s)";
+
+  // Save it first
+  API_URL = url;
+  localStorage.setItem("rb_api_url", url);
+
+  // Try a JSONP ping
+  var cbName = "_rbtest" + Date.now();
+  var done = false;
+
+  var timer = setTimeout(function() {
+    if (done) return;
+    done = true;
+    delete window[cbName];
+    var s = document.getElementById(cbName);
+    if (s) s.remove();
+    dbg.style.color = "var(--danger)";
+    dbg.innerHTML = "❌ <b>Timed out</b> — Apps Script didn't respond in 15s.<br>"
+      + "Make sure you:<br>"
+      + "1. Created a <b>New Deployment</b> (not updated an existing one)<br>"
+      + "2. Set access to <b>Anyone</b><br>"
+      + "3. Copied the new /exec URL (not the /edit URL)<br><br>"
+      + "URL used: " + url;
+  }, 15000);
+
+  window[cbName] = function(data) {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    delete window[cbName];
+    var s = document.getElementById(cbName);
+    if (s) s.remove();
+    dbg.style.color = "var(--success)";
+    dbg.innerHTML = "✅ <b>Connected!</b> Apps Script is responding.<br>URL saved.";
+    document.getElementById("hStatus").textContent = "● connected";
+    document.getElementById("hStatus").style.color = "var(--success)";
+  };
+
+  var script = document.createElement("script");
+  script.id = cbName;
+  script.src = url + "?callback=" + cbName;
+  script.onerror = function() {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    delete window[cbName];
+    script.remove();
+    dbg.style.color = "var(--danger)";
+    dbg.innerHTML = "❌ <b>Script load failed</b><br>"
+      + "This usually means the deployment doesn't exist or access is set to 'Only myself'.<br><br>"
+      + "Steps to fix:<br>"
+      + "1. In Apps Script: <b>Deploy → New deployment</b><br>"
+      + "2. Type: Web app<br>"
+      + "3. Execute as: Me<br>"
+      + "4. Who has access: <b>Anyone</b><br>"
+      + "5. Click Deploy → copy the new URL<br>"
+      + "6. Paste it here and tap Test again<br><br>"
+      + "URL tried: " + url;
+  };
+  document.head.appendChild(script);
 }
 
 // ══════════════════════════════════════════════════════
