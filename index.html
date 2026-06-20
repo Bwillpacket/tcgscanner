@@ -328,8 +328,11 @@ header{display:flex;align-items:center;justify-content:space-between;
         <div class="slabel">Vision API Key (optional)</div>
         <div class="ssub">Enables automatic OCR. Stored on this device only. Without it, use Manual entry.</div>
       </div>
-      <input class="full-input" id="sKey" type="text" placeholder="AIza…">
-      <div class="srow"><button class="btn btn-surface" style="font-size:.82rem" onclick="saveKey()">Save Key on Device</button></div>
+      <input class="full-input" id="sKey" type="text" placeholder="AIza…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="srow" style="gap:12px">
+        <button class="btn btn-surface" style="font-size:.82rem;flex:0;white-space:nowrap;padding:10px 16px" onclick="saveKey()">Save Key</button>
+        <span id="keyStatus" style="font-size:.78rem;color:var(--muted)">Not set</span>
+      </div>
     </div>
 
     <div class="scard">
@@ -382,17 +385,18 @@ var recentScans  = [];
 var pendingCF    = null;
 
 // ── Init ────────────────────────────────────────────
-(function init() {
+document.addEventListener("DOMContentLoaded", function() {
   if (API_URL) {
     document.getElementById("setupScreen").style.display = "none";
     document.getElementById("sUrl").value = API_URL;
   }
   var savedKey = localStorage.getItem("rb_vision_key") || "";
   if (savedKey) {
-    var el = document.getElementById("sKey");
-    if (el) el.value = savedKey;
+    document.getElementById("sKey").value = savedKey;
+    document.getElementById("keyStatus").textContent = "Key saved ✓";
+    document.getElementById("keyStatus").style.color = "var(--success)";
   }
-})();
+});
 
 // ══════════════════════════════════════════════════════
 //  SETUP
@@ -767,7 +771,9 @@ function saveKey() {
   var k = document.getElementById("sKey").value.trim();
   if (!k) { toast("Enter a key first","err"); return; }
   localStorage.setItem("rb_vision_key", k);
-  toast("Vision API key saved on this device","ok");
+  document.getElementById("keyStatus").textContent = "Key saved ✓";
+  document.getElementById("keyStatus").style.color = "var(--success)";
+  toast("Vision key saved — OCR is active","ok");
 }
 
 // ══════════════════════════════════════════════════════
