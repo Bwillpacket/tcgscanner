@@ -419,30 +419,44 @@ function updateUrl() {
 }
 
 // ══════════════════════════════════════════════════════
-//  API CALLS
-//  Uses XMLHttpRequest instead of fetch — XHR correctly
-//  follows Apps Script's cross-domain redirects on iOS.
+//  API CALLS via JSONP
+//  JSONP injects a <script> tag — completely bypasses
+//  CORS and redirect issues with Apps Script on iOS.
 // ══════════════════════════════════════════════════════
+var _jsonpCb = 0;
 function apiGet(params) {
-  var qs = Object.keys(params).map(function(k){
-    return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
-  }).join("&");
-  var url = API_URL + "?" + qs;
-
   return new Promise(function(resolve, reject) {
-    var xhr = new XMLHttpRequest();
-    xhr.open("GET", url, true);
-    xhr.onload = function() {
-      try {
-        resolve(JSON.parse(xhr.responseText));
-      } catch(e) {
-        reject(new Error("Bad JSON: " + xhr.responseText.substring(0, 100)));
-      }
+    var cbName = "_rbc" + (++_jsonpCb);
+    var timer = setTimeout(function() {
+      delete window[cbName];
+      var s = document.getElementById(cbName);
+      if (s) s.remove();
+      reject(new Error("Request timed out"));
+    }, 15000);
+
+    window[cbName] = function(data) {
+      clearTimeout(timer);
+      delete window[cbName];
+      var s = document.getElementById(cbName);
+      if (s) s.remove();
+      resolve(data);
     };
-    xhr.onerror = function() { reject(new Error("Network error")); };
-    xhr.ontimeout = function() { reject(new Error("Timeout")); };
-    xhr.timeout = 15000;
-    xhr.send();
+
+    params.callback = cbName;
+    var qs = Object.keys(params).map(function(k){
+      return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
+    }).join("&");
+
+    var script = document.createElement("script");
+    script.id = cbName;
+    script.src = API_URL + "?" + qs;
+    script.onerror = function() {
+      clearTimeout(timer);
+      delete window[cbName];
+      script.remove();
+      reject(new Error("Script load failed — check your Apps Script URL"));
+    };
+    document.head.appendChild(script);
   });
 }
 
