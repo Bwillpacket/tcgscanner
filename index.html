@@ -420,16 +420,30 @@ function updateUrl() {
 
 // ══════════════════════════════════════════════════════
 //  API CALLS
-//  Apps Script only accepts cross-origin GET requests.
-//  addCard/getInventory use query params on GET.
-//  OCR runs directly in browser against Vision API.
+//  Uses XMLHttpRequest instead of fetch — XHR correctly
+//  follows Apps Script's cross-domain redirects on iOS.
 // ══════════════════════════════════════════════════════
 function apiGet(params) {
   var qs = Object.keys(params).map(function(k){
     return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
   }).join("&");
-  return fetch(API_URL + "?" + qs, { redirect: "follow" })
-    .then(function(r) { return r.json(); });
+  var url = API_URL + "?" + qs;
+
+  return new Promise(function(resolve, reject) {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url, true);
+    xhr.onload = function() {
+      try {
+        resolve(JSON.parse(xhr.responseText));
+      } catch(e) {
+        reject(new Error("Bad JSON: " + xhr.responseText.substring(0, 100)));
+      }
+    };
+    xhr.onerror = function() { reject(new Error("Network error")); };
+    xhr.ontimeout = function() { reject(new Error("Timeout")); };
+    xhr.timeout = 15000;
+    xhr.send();
+  });
 }
 
 // OCR runs directly in the browser — Vision API key stored in localStorage
@@ -673,14 +687,14 @@ function commit(card) {
   st("", '<span class="spinner"></span> Saving…');
   apiGet({ action:"addCard", name:card.name, set:card.set||"Unknown", rarity:card.rarity||"Unknown", foil:card.foil?1:0 })
   .then(function(res) {
-    if (!res.success) { toast(res.error||"Save failed","err"); return; }
-    var lbl = res.action==="added"?"Added":"Updated";
-    toast(lbl+": "+card.name+" (x"+res.qty+")","ok");
+    if (!res.success) { toast("Not saved: " + (res.error||"unknown error"), "err"); return; }
+    var lbl = res.action==="added" ? "Added" : "Updated";
+    toast(lbl+": "+card.name+" (x"+res.qty+")", "ok");
     st("ready","Waiting for card…");
     if (document.getElementById("sSound").checked) beep();
     addRecent(card, res.qty);
   })
-  .catch(function(e){ toast("Save failed: "+e.message,"err"); });
+  .catch(function(e){ toast("Save error: "+e.message, "err"); });
 }
 
 // ══════════════════════════════════════════════════════
