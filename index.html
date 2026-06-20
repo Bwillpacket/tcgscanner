@@ -326,10 +326,10 @@ header{display:flex;align-items:center;justify-content:space-between;
     <div class="scard">
       <div class="srow" style="flex-direction:column;align-items:flex-start;gap:4px">
         <div class="slabel">Vision API Key (optional)</div>
-        <div class="ssub">Enables automatic OCR. Without it, use Manual entry.</div>
+        <div class="ssub">Enables automatic OCR. Stored on this device only. Without it, use Manual entry.</div>
       </div>
       <input class="full-input" id="sKey" type="text" placeholder="AIza…">
-      <div class="srow"><button class="btn btn-surface" style="font-size:.82rem" onclick="saveKey()">Save Key to Sheet</button></div>
+      <div class="srow"><button class="btn btn-surface" style="font-size:.82rem" onclick="saveKey()">Save Key on Device</button></div>
     </div>
 
     <div class="scard">
@@ -387,6 +387,11 @@ var pendingCF    = null;
     document.getElementById("setupScreen").style.display = "none";
     document.getElementById("sUrl").value = API_URL;
   }
+  var savedKey = localStorage.getItem("rb_vision_key") || "";
+  if (savedKey) {
+    var el = document.getElementById("sKey");
+    if (el) el.value = savedKey;
+  }
 })();
 
 // ══════════════════════════════════════════════════════
@@ -410,21 +415,52 @@ function updateUrl() {
 }
 
 // ══════════════════════════════════════════════════════
-//  API CALLS  (fetch → Apps Script REST)
+//  API CALLS
+//  Apps Script only accepts cross-origin GET requests.
+//  addCard/getInventory use query params on GET.
+//  OCR runs directly in browser against Vision API.
 // ══════════════════════════════════════════════════════
-function apiFetch(body) {
-  return fetch(API_URL, {
-    method:  "POST",
-    body:    JSON.stringify(body),
-    // No custom Content-Type — avoids CORS preflight with Apps Script
-  }).then(function(r){ return r.json(); });
-}
-
 function apiGet(params) {
   var qs = Object.keys(params).map(function(k){
-    return encodeURIComponent(k)+"="+encodeURIComponent(params[k]);
+    return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
   }).join("&");
-  return fetch(API_URL + "?" + qs).then(function(r){ return r.json(); });
+  return fetch(API_URL + "?" + qs, { redirect: "follow" })
+    .then(function(r) { return r.json(); });
+}
+
+// OCR runs directly in the browser — Vision API key stored in localStorage
+function runOCR(base64jpeg) {
+  var key = localStorage.getItem("rb_vision_key") || "";
+  if (!key) return Promise.resolve({ success: false, manualEntry: true });
+
+  return fetch("https://vision.googleapis.com/v1/images:annotate?key=" + key, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requests: [{ image: { content: base64jpeg },
+                   features: [{ type: "TEXT_DETECTION", maxResults: 1 }] }]
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(json) {
+    var texts = json.responses && json.responses[0] && json.responses[0].textAnnotations;
+    if (!texts || !texts.length) return { success: false, error: "No text detected" };
+    return parseCardText(texts[0].description || "");
+  });
+}
+
+function parseCardText(raw) {
+  var lines = raw.split("\n").map(function(l){ return l.trim(); }).filter(Boolean);
+  var name = "", set = "Riftbound", rarity = "Unknown";
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/^\d+$/.test(line) || line.length < 2 || /^[©®™]/.test(line)) continue;
+    var rm = line.match(/\b(common|uncommon|rare|legendary)\b/i);
+    if (rm) { rarity = rm[1].charAt(0).toUpperCase() + rm[1].slice(1).toLowerCase(); continue; }
+    if (/^[A-Z]{2,5}[-\u2013]?\d{0,4}$/.test(line)) { set = line; continue; }
+    if (!name && line.length >= 3 && /[A-Za-z]/.test(line)) name = line;
+  }
+  return { success: true, name: name, set: set, rarity: rarity };
 }
 
 // ══════════════════════════════════════════════════════
@@ -523,9 +559,9 @@ function captureFrame() {
   st("", '<span class="spinner"></span> Reading…');
   clearInterval(scanTimer); // pause while waiting
 
-  apiFetch({ action:"processImage", image:b64 })
+  runOCR(b64)
   .then(function(res){ onDetect(res); })
-  .catch(function(e){ st("err","API error: "+e.message); resumeScan(); });
+  .catch(function(e){ st("err","OCR error: "+e.message); resumeScan(); });
 }
 
 function resumeScan() {
@@ -631,11 +667,11 @@ function cfSkip() {
 // ══════════════════════════════════════════════════════
 function commit(card) {
   st("", '<span class="spinner"></span> Saving…');
-  apiFetch({ action:"addCard", name:card.name, set:card.set, rarity:card.rarity, foil:card.foil })
+  apiGet({ action:"addCard", name:card.name, set:card.set||"Unknown", rarity:card.rarity||"Unknown", foil:card.foil?1:0 })
   .then(function(res) {
     if (!res.success) { toast(res.error||"Save failed","err"); return; }
     var lbl = res.action==="added"?"Added":"Updated";
-    toast(lbl+": "+card.name+" (×"+res.qty+")","ok");
+    toast(lbl+": "+card.name+" (x"+res.qty+")","ok");
     st("ready","Waiting for card…");
     if (document.getElementById("sSound").checked) beep();
     addRecent(card, res.qty);
@@ -729,10 +765,9 @@ function filterInv() {
 // ══════════════════════════════════════════════════════
 function saveKey() {
   var k = document.getElementById("sKey").value.trim();
-  if (!k) return;
-  apiFetch({ action:"saveKey", key:k })
-  .then(function(){ toast("API key saved","ok"); })
-  .catch(function(e){ toast(e.message,"err"); });
+  if (!k) { toast("Enter a key first","err"); return; }
+  localStorage.setItem("rb_vision_key", k);
+  toast("Vision API key saved on this device","ok");
 }
 
 // ══════════════════════════════════════════════════════
