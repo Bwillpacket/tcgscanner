@@ -640,26 +640,111 @@ function cropCanvasToBase64(source, xPct, yPct, wPct, hPct, scale, quality, filt
 }
 
 function makeScanPayload(cardCanvas) {
-  var titleBand = findTitleBandRect(cardCanvas);
+  var cardRect = findCardRect(cardCanvas);
+  var titleBand = findTitleBandRect(cardCanvas, cardRect);
   return {
-    full: canvasToJpegBase64(cardCanvas, .9),
-    top: cropCanvasToBase64(cardCanvas, .02, .03, .96, .40, 2.1, .9, "contrast(135%) brightness(108%)"),
+    full: cropCanvasRectToBase64(cardCanvas, cardRect.x, cardRect.y, cardRect.w, cardRect.h, 1.7, .9, "contrast(118%) brightness(106%)"),
+    top: cropCanvasRectToBase64(cardCanvas, cardRect.x + cardRect.w * .02, cardRect.y + cardRect.h * .03, cardRect.w * .96, cardRect.h * .42, 2.1, .9, "contrast(135%) brightness(108%)"),
     name: cropCanvasRectToBase64(cardCanvas, titleBand.x, titleBand.y, titleBand.w, titleBand.h, 2.8, .92, "contrast(160%) brightness(116%) saturate(115%)"),
-    bottom: cropCanvasToBase64(cardCanvas, .02, .68, .96, .30, 3, .92, "contrast(170%) brightness(116%) saturate(75%)"),
-    rarityHint: detectRarityFromCanvas(cardCanvas)
+    bottom: cropCanvasRectToBase64(cardCanvas, cardRect.x + cardRect.w * .02, cardRect.y + cardRect.h * .67, cardRect.w * .96, cardRect.h * .31, 3, .92, "contrast(170%) brightness(116%) saturate(75%)"),
+    rarityHint: detectRarityFromCanvas(cardCanvas, cardRect)
   };
 }
 
-function findTitleBandRect(cardCanvas) {
+function findCardRect(source) {
+  var w = source.width;
+  var h = source.height;
+  var probe = document.createElement("canvas");
+  probe.width = 180;
+  probe.height = 240;
+  var ctx = probe.getContext("2d");
+  ctx.drawImage(source, 0, 0, probe.width, probe.height);
+
+  var data;
+  try {
+    data = ctx.getImageData(0, 0, probe.width, probe.height).data;
+  } catch(e) {
+    return fallbackCardRect(w, h);
+  }
+
+  var minX = probe.width, minY = probe.height, maxX = 0, maxY = 0;
+  var hits = 0;
+  for (var y = 0; y < probe.height; y += 2) {
+    for (var x = 0; x < probe.width; x += 2) {
+      var nx = x / probe.width;
+      var ny = y / probe.height;
+      if (nx < .12 || nx > .88 || ny < .08 || ny > .86) continue;
+      var i = (y * probe.width + x) * 4;
+      if (!isCardContentPixel(data[i], data[i+1], data[i+2])) continue;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      hits++;
+    }
+  }
+
+  if (hits < 220) return fallbackCardRect(w, h);
+
+  var raw = {
+    x: minX / probe.width * w,
+    y: minY / probe.height * h,
+    w: (maxX - minX) / probe.width * w,
+    h: (maxY - minY) / probe.height * h
+  };
+
+  var cx = raw.x + raw.w / 2;
+  var cy = raw.y + raw.h / 2;
+  var targetAspect = 5 / 7;
+  var rectW = raw.w * 1.10;
+  var rectH = raw.h * 1.08;
+  if (rectW / rectH > targetAspect) rectW = rectH * targetAspect;
+  else rectH = rectW / targetAspect;
+
+  return clampRect({
+    x: cx - rectW / 2,
+    y: cy - rectH / 2,
+    w: rectW,
+    h: rectH
+  }, w, h);
+}
+
+function isCardContentPixel(r, g, b) {
+  var hsv = rgbToHsv(r, g, b);
+  if (hsv.s > .20 && hsv.v > .18) return true;
+  if (hsv.v > .78) return true;
+  return false;
+}
+
+function fallbackCardRect(w, h) {
+  var rectH = h * .72;
+  var rectW = rectH * 5 / 7;
+  return clampRect({
+    x: (w - rectW) / 2,
+    y: h * .13,
+    w: rectW,
+    h: rectH
+  }, w, h);
+}
+
+function clampRect(rect, maxW, maxH) {
+  var x = Math.max(0, Math.min(maxW - 1, rect.x));
+  var y = Math.max(0, Math.min(maxH - 1, rect.y));
+  var w = Math.max(1, Math.min(maxW - x, rect.w));
+  var h = Math.max(1, Math.min(maxH - y, rect.h));
+  return { x:x, y:y, w:w, h:h };
+}
+
+function findTitleBandRect(cardCanvas, cardRect) {
   var w = cardCanvas.width;
   var h = cardCanvas.height;
   var probe = document.createElement("canvas");
   probe.width = 160;
   probe.height = 220;
-  var px = Math.round(w * .05);
-  var py = Math.round(h * .34);
-  var pw = Math.round(w * .90);
-  var ph = Math.round(h * .38);
+  var px = Math.round(cardRect.x + cardRect.w * .03);
+  var py = Math.round(cardRect.y + cardRect.h * .34);
+  var pw = Math.round(cardRect.w * .94);
+  var ph = Math.round(cardRect.h * .38);
   var ctx = probe.getContext("2d");
   ctx.drawImage(cardCanvas, px, py, pw, ph, 0, 0, probe.width, probe.height);
 
@@ -667,7 +752,7 @@ function findTitleBandRect(cardCanvas) {
   try {
     data = ctx.getImageData(0, 0, probe.width, probe.height).data;
   } catch(e) {
-    return fallbackTitleBandRect(w, h);
+    return fallbackTitleBandRect(cardRect);
   }
 
   var bestY = -1;
@@ -684,25 +769,25 @@ function findTitleBandRect(cardCanvas) {
     }
   }
 
-  if (bestY < 0 || bestScore < 12) return fallbackTitleBandRect(w, h);
+  if (bestY < 0 || bestScore < 12) return fallbackTitleBandRect(cardRect);
 
   var bandCenterY = py + (bestY / probe.height) * ph;
-  var cropH = h * .22;
-  var cropY = Math.max(h * .36, Math.min(h * .62, bandCenterY - cropH * .46));
-  return {
-    x: w * .04,
+  var cropH = cardRect.h * .18;
+  var cropY = Math.max(cardRect.y + cardRect.h * .39, Math.min(cardRect.y + cardRect.h * .58, bandCenterY - cropH * .42));
+  return clampRect({
+    x: cardRect.x + cardRect.w * .04,
     y: cropY,
-    w: w * .92,
+    w: cardRect.w * .92,
     h: cropH
-  };
+  }, w, h);
 }
 
-function fallbackTitleBandRect(w, h) {
+function fallbackTitleBandRect(cardRect) {
   return {
-    x: w * .04,
-    y: h * .44,
-    w: w * .92,
-    h: h * .24
+    x: cardRect.x + cardRect.w * .04,
+    y: cardRect.y + cardRect.h * .43,
+    w: cardRect.w * .92,
+    h: cardRect.h * .20
   };
 }
 
@@ -717,14 +802,14 @@ function isTitleBandPixel(r, g, b) {
          (hsv.h <= 10 || hsv.h >= 344);        // red
 }
 
-function detectRarityFromCanvas(cardCanvas) {
+function detectRarityFromCanvas(cardCanvas, cardRect) {
   var sample = document.createElement("canvas");
   sample.width = 220;
   sample.height = 140;
-  var sx = Math.round(cardCanvas.width * .34);
-  var sy = Math.round(cardCanvas.height * .82);
-  var sw = Math.round(cardCanvas.width * .32);
-  var sh = Math.round(cardCanvas.height * .17);
+  var sx = Math.round(cardRect.x + cardRect.w * .31);
+  var sy = Math.round(cardRect.y + cardRect.h * .80);
+  var sw = Math.round(cardRect.w * .38);
+  var sh = Math.round(cardRect.h * .18);
   var ctx = sample.getContext("2d");
   ctx.drawImage(cardCanvas, sx, sy, sw, sh, 0, 0, sample.width, sample.height);
 
@@ -989,7 +1074,10 @@ function collectNameCandidates(lines, baseScore, out) {
 
       var score = baseScore + Math.max(0, 6 - i) * .35;
       if (i > 0 && isTypeLine(lines[i - 1])) score += 2.8;
-      if (j > 0) score += 1.1;
+      if (j > 0) {
+        score -= .6;
+        if (name.length < rawName.length * .65) score -= .8;
+      }
       if (/[A-Z][a-z]/.test(name)) score += 2.5;
       if (/^[A-Z0-9 ,'\-]+$/.test(name) && name.length <= 16) score += .4;
       if (/^[A-Z0-9'\-]+$/.test(name) && name.length <= 12) score -= .9;
