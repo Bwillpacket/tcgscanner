@@ -399,6 +399,7 @@ var pendingCF    = null;
 var cardDb       = [];
 var cardDbLoaded = false;
 var cardDbLoading = null;
+var cardDbError  = "";
 
 // ── Init ────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", function() {
@@ -579,8 +580,16 @@ function loadCardDatabase(force) {
   if (cardDbLoading && !force) return cardDbLoading;
   if (cardDbLoaded && cardDb.length && !force) return Promise.resolve(cardDb);
 
+  cardDbError = "";
   cardDbLoading = apiGet({ action:"cardDb" })
     .then(function(data) {
+      var hasCardPayload = Array.isArray(data) ||
+        (data && Array.isArray(data.cards)) ||
+        (data && Array.isArray(data.data));
+      if (!hasCardPayload) {
+        throw new Error("Card database endpoint is missing. Redeploy Apps Script with action=cardDb.");
+      }
+
       var rows = Array.isArray(data) ? data
         : (data && Array.isArray(data.cards)) ? data.cards
         : (data && Array.isArray(data.data)) ? data.data
@@ -589,10 +598,12 @@ function loadCardDatabase(force) {
       cardDbLoaded = true;
       try { localStorage.setItem("rb_card_db", JSON.stringify(cardDb)); } catch(e) {}
       if (cardDb.length) st("ready", "Card database loaded: " + cardDb.length + " cards");
+      else cardDbError = "Card Database sheet is empty";
       return cardDb;
     })
     .catch(function(e) {
       cardDbLoaded = false;
+      cardDbError = e.message || "Card database unavailable";
       if (cardDb.length) return cardDb;
       throw e;
     });
@@ -635,7 +646,7 @@ function normalizeCardDb(rows) {
 function resolveCardWithDb(card) {
   var out = Object.assign({}, card);
   out.dbMatch = false;
-  out.dbNote = cardDb.length ? "No database match" : "Database not loaded";
+  out.dbNote = cardDb.length ? "No database match" : (cardDbError || "Database not loaded");
   if (!cardDb.length) return out;
 
   var setKey = normalizeSetCode(out.set || "");
@@ -694,6 +705,7 @@ function normalizeCardNum(value) {
   var s = String(value || "").trim().toLowerCase();
   s = s.replace(/[•·∙⋅]/g, "").replace(/^#/, "").replace(/\s+/g, "");
   s = s.replace(/[o]/g, "0");
+  s = s.replace(/^0*([0-9]+)(a|\*)?\/[0-9]+$/, "$1$2");
   var m = s.match(/^0*([0-9]+)(a|\*)?$/);
   if (!m) return s.toUpperCase();
   return String(parseInt(m[1], 10)).padStart(3, "0") + (m[2] || "");
@@ -1372,7 +1384,7 @@ function toggleScan() {
 
   loadCardDatabase(false)
     .catch(function() {
-      toast("Card database unavailable — OCR only", "err");
+      toast(cardDbError || "Card database unavailable — OCR only", "err");
       return [];
     })
     .then(function() {
