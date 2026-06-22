@@ -396,6 +396,9 @@ var foilMode     = false;
 var inventory    = [];
 var recentScans  = [];
 var pendingCF    = null;
+var cardDb       = [];
+var cardDbLoaded = false;
+var cardDbLoading = null;
 
 // ── Init ────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", function() {
@@ -409,6 +412,7 @@ document.addEventListener("DOMContentLoaded", function() {
     document.getElementById("keyStatus").textContent = "Key saved ✓";
     document.getElementById("keyStatus").style.color = "var(--success)";
   }
+  loadCardDbCache();
 });
 
 // ══════════════════════════════════════════════════════
@@ -555,6 +559,188 @@ function apiGet(params) {
     };
     document.head.appendChild(script);
   });
+}
+
+// ══════════════════════════════════════════════════════
+//  CARD DATABASE CACHE + MATCHING
+// ══════════════════════════════════════════════════════
+function loadCardDbCache() {
+  try {
+    var cached = JSON.parse(localStorage.getItem("rb_card_db") || "[]");
+    if (Array.isArray(cached) && cached.length) {
+      cardDb = normalizeCardDb(cached);
+      cardDbLoaded = true;
+    }
+  } catch(e) {}
+}
+
+function loadCardDatabase(force) {
+  if (!API_URL) return Promise.resolve(cardDb);
+  if (cardDbLoading && !force) return cardDbLoading;
+  if (cardDbLoaded && cardDb.length && !force) return Promise.resolve(cardDb);
+
+  cardDbLoading = apiGet({ action:"cardDb" })
+    .then(function(data) {
+      var rows = Array.isArray(data) ? data
+        : (data && Array.isArray(data.cards)) ? data.cards
+        : (data && Array.isArray(data.data)) ? data.data
+        : [];
+      cardDb = normalizeCardDb(rows);
+      cardDbLoaded = true;
+      try { localStorage.setItem("rb_card_db", JSON.stringify(cardDb)); } catch(e) {}
+      if (cardDb.length) st("ready", "Card database loaded: " + cardDb.length + " cards");
+      return cardDb;
+    })
+    .catch(function(e) {
+      cardDbLoaded = false;
+      if (cardDb.length) return cardDb;
+      throw e;
+    });
+
+  cardDbLoading = cardDbLoading.then(function(db) {
+    cardDbLoading = null;
+    return db;
+  }, function(e) {
+    cardDbLoading = null;
+    throw e;
+  });
+
+  return cardDbLoading;
+}
+
+function normalizeCardDb(rows) {
+  return (rows || []).map(function(row) {
+    var card = Array.isArray(row) ? {
+      name: row[0], set: row[1], cardNum: row[2], variant: row[3], rarity: row[4]
+    } : {
+      name: row.name || row.cardName || row["Card Name"] || row["Name"],
+      set: row.set || row.setCode || row["Set"] || row["Set Code"],
+      cardNum: row.cardNum || row.cardNumber || row.number || row["Card #"] || row["Card Number"] || row["Number"] || row["#"],
+      variant: row.variant || row["Variant"],
+      rarity: row.rarity || row["Rarity"]
+    };
+
+    card.name = String(card.name || "").trim();
+    card.set = normalizeSetCode(card.set || "");
+    card.cardNum = normalizeCardNum(card.cardNum || "");
+    card.variant = String(card.variant || "Normal").trim() || "Normal";
+    card.rarity = String(card.rarity || "Unknown").trim() || "Unknown";
+    card._nameKey = nameKey(card.name);
+    card._setKey = normalizeSetCode(card.set);
+    card._numKey = normalizeCardNum(card.cardNum).toLowerCase();
+    return card;
+  }).filter(function(card){ return card.name && (card.cardNum || card._nameKey); });
+}
+
+function resolveCardWithDb(card) {
+  var out = Object.assign({}, card);
+  out.dbMatch = false;
+  out.dbNote = cardDb.length ? "No database match" : "Database not loaded";
+  if (!cardDb.length) return out;
+
+  var setKey = normalizeSetCode(out.set || "");
+  var numKey = normalizeCardNum(out.cardNum || "").toLowerCase();
+  var name = String(out.name || "").trim();
+  var nKey = nameKey(name);
+
+  var match = null;
+  if (setKey && numKey) {
+    match = findDbCard(function(c){ return c._setKey === setKey && c._numKey === numKey; });
+  }
+  if (!match && numKey) {
+    var numMatches = cardDb.filter(function(c){ return c._numKey === numKey; });
+    if (setKey) numMatches = numMatches.filter(function(c){ return c._setKey === setKey; });
+    if (numMatches.length === 1) match = numMatches[0];
+  }
+  if (!match && nKey) {
+    match = bestNameDbMatch(nKey, setKey, numKey);
+  }
+
+  if (!match) return out;
+  out.name = match.name;
+  out.set = match.set || out.set || "Unknown";
+  out.cardNum = match.cardNum || out.cardNum || "";
+  out.variant = match.variant || out.variant || "Normal";
+  out.rarity = match.rarity || out.rarity || "Unknown";
+  out.dbMatch = true;
+  out.dbNote = "Matched card database";
+  return out;
+}
+
+function findDbCard(test) {
+  for (var i = 0; i < cardDb.length; i++) {
+    if (test(cardDb[i])) return cardDb[i];
+  }
+  return null;
+}
+
+function bestNameDbMatch(nKey, setKey, numKey) {
+  var best = null;
+  var bestScore = 0;
+  for (var i = 0; i < cardDb.length; i++) {
+    var c = cardDb[i];
+    if (setKey && c._setKey !== setKey) continue;
+    if (numKey && c._numKey !== numKey) continue;
+    var score = nameSimilarity(nKey, c._nameKey);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return bestScore >= .78 ? best : null;
+}
+
+function normalizeCardNum(value) {
+  var s = String(value || "").trim().toLowerCase();
+  s = s.replace(/[•·∙⋅]/g, "").replace(/^#/, "").replace(/\s+/g, "");
+  s = s.replace(/[o]/g, "0");
+  var m = s.match(/^0*([0-9]+)(a|\*)?$/);
+  if (!m) return s.toUpperCase();
+  return String(parseInt(m[1], 10)).padStart(3, "0") + (m[2] || "");
+}
+
+function normalizeSetCode(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/0/g, "O")
+    .replace(/1/g, "I")
+    .replace(/5/g, "S")
+    .replace(/8/g, "B")
+    .replace(/[^A-Z]/g, "");
+}
+
+function nameKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function nameSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.indexOf(b) > -1 || b.indexOf(a) > -1) {
+    return Math.min(a.length, b.length) / Math.max(a.length, b.length);
+  }
+  var maxLen = Math.max(a.length, b.length);
+  if (!maxLen) return 1;
+  return 1 - (levenshtein(a, b) / maxLen);
+}
+
+function levenshtein(a, b) {
+  var prev = [];
+  for (var j = 0; j <= b.length; j++) prev[j] = j;
+  for (var i = 1; i <= a.length; i++) {
+    var cur = [i];
+    for (j = 1; j <= b.length; j++) {
+      var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
 }
 
 // OCR runs directly in the browser — Vision API key stored in localStorage
@@ -1181,15 +1367,26 @@ function stopCam() {
 // ══════════════════════════════════════════════════════
 function toggleScan() {
   if (scanning) { stopScan(); return; }
-  startCam(function() {
-    scanning = true;
-    document.getElementById("btnScan").textContent = "⏹ Stop Scanning";
-    document.getElementById("btnScan").className = "btn btn-danger";
-    document.getElementById("frame").classList.add("scanning");
-    st("ready", "Waiting for card…");
-    var iv = parseInt(document.getElementById("sInterval").value) || 2000;
-    scanTimer = setInterval(captureFrame, iv);
-  });
+  document.getElementById("btnScan").disabled = true;
+  st("", '<span class="spinner"></span> Loading card database…');
+
+  loadCardDatabase(false)
+    .catch(function() {
+      toast("Card database unavailable — OCR only", "err");
+      return [];
+    })
+    .then(function() {
+      startCam(function() {
+        scanning = true;
+        document.getElementById("btnScan").disabled = false;
+        document.getElementById("btnScan").textContent = "⏹ Stop Scanning";
+        document.getElementById("btnScan").className = "btn btn-danger";
+        document.getElementById("frame").classList.add("scanning");
+        st("ready", cardDb.length ? "Waiting for card… DB ready" : "Waiting for card… OCR only");
+        var iv = parseInt(document.getElementById("sInterval").value) || 2000;
+        scanTimer = setInterval(captureFrame, iv);
+      });
+    });
 }
 
 function stopScan() {
@@ -1271,12 +1468,22 @@ function onDetect(res) {
   }
   if (!res.name) { st("ready","No card name — reposition"); resumeScan(); return; }
 
+  res = resolveCardWithDb(res);
+
   var rl = (res.rarity||"").toLowerCase();
   var isBatch = rl==="common"||rl==="uncommon"||rl==="";
 
   pendingCF = { name:res.name, set:res.set||"Unknown", rarity:res.rarity||"Unknown",
                 cardNum:res.cardNum||"", variant:res.variant||"Normal",
-                foil: isBatch ? foilMode : null };
+                foil: isBatch ? foilMode : null,
+                dbMatch: !!res.dbMatch,
+                dbNote: res.dbNote || "" };
+
+  if (cardDb.length && !pendingCF.dbMatch) {
+    pendingCF.foil = isBatch ? foilMode : null;
+    showCF(!isBatch);
+    return;
+  }
 
   if (document.getElementById("sConfirm").checked) {
     showCF(!isBatch); // ask foil individually for Rare/Epic/Showcase
@@ -1292,6 +1499,9 @@ function onDetect(res) {
 // ══════════════════════════════════════════════════════
 function showCF(askFoil) {
   var c = pendingCF;
+  var dbHtml = c.dbNote
+    ? '<div style="font-size:.76rem;color:'+(c.dbMatch?'var(--success)':'var(--danger)')+'">'+esc(c.dbNote)+'</div>'
+    : "";
   var foilHtml = askFoil
     ? '<div class="cf-foil-row">'
       + '<button class="btn btn-surface" id="cfNF" onclick="cfFoil(false)" style="font-size:.82rem">Non-Foil</button>'
@@ -1307,6 +1517,7 @@ function showCF(askFoil) {
     '<div class="cf-sheet">'
     + '<div class="cf-title">Card Detected</div>'
     + '<div class="cf-fields">'
+    + dbHtml
     + '<input id="cfName" type="text" value="'+esc(c.name)+'" placeholder="Card name" style="font-weight:700">'
     + '<div class="row2">'
     + '<input id="cfSet"    type="text" value="'+esc(c.set)+'"     placeholder="Set (e.g. OGN)" style="flex:1">'
@@ -1349,7 +1560,11 @@ function cfOK() {
   var variant = document.getElementById("cfVar").value;
   var foil    = (pendingCF.foil !== null) ? pendingCF.foil : _cfFoil;
   document.getElementById("cfOverlay").remove();
-  if (name) commit({ name:name, set:set, cardNum:cardNum, variant:variant, rarity:rar, foil:foil });
+  var card = resolveCardWithDb({ name:name, set:set, cardNum:cardNum, variant:variant, rarity:rar, foil:foil });
+  if (card.name) {
+    if (cardDb.length && !card.dbMatch) toast("Saving unverified card", "err");
+    commit(card);
+  }
   resumeScan();
 }
 function cfSkip() {
@@ -1389,18 +1604,26 @@ function submitManual() {
   var cardNum = document.getElementById("mNum").value.trim()||"";
   var variant = document.getElementById("mVariant").value;
   var rar     = document.getElementById("mRarity").value;
-  if (!name) { toast("Enter a card name","err"); return; }
   var f = ["common","uncommon"].indexOf(rar.toLowerCase()) > -1 ? foilMode : false;
-  commit({ name:name, set:set, cardNum:cardNum, variant:variant, rarity:rar, foil:f });
-  document.getElementById("mName").value = "";
-  toggleManual();
+  var entered = { name:name, set:set, cardNum:cardNum, variant:variant, rarity:rar, foil:f };
+
+  loadCardDatabase(false)
+    .catch(function(){ return cardDb; })
+    .then(function() {
+      var card = resolveCardWithDb(entered);
+      if (!card.name) { toast("Enter a card name or database set/#","err"); return; }
+      if (cardDb.length && !card.dbMatch) toast("Saving unverified card", "err");
+      commit(card);
+      document.getElementById("mName").value = "";
+      toggleManual();
+    });
 }
 
 // ══════════════════════════════════════════════════════
 //  RECENT
 // ══════════════════════════════════════════════════════
 function addRecent(card, qty) {
-  recentScans.unshift({ name:card.name, set:card.set, rarity:card.rarity, foil:card.foil, qty:qty });
+  recentScans.unshift({ name:card.name, set:card.set, cardNum:card.cardNum, variant:card.variant, rarity:card.rarity, foil:card.foil, qty:qty });
   if (recentScans.length > 20) recentScans.pop();
   renderRecent();
 }
