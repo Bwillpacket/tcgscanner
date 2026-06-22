@@ -277,11 +277,18 @@ header{display:flex;align-items:center;justify-content:space-between;
   </div>
 
   <div class="manual-panel" id="manualPanel">
-    <input type="text"   id="mName"   placeholder="Card name…">
-    <input type="text"   id="mSet"    placeholder="Set (e.g. RB-1)">
-    <select id="mRarity">
+    <input type="text" id="mName"    placeholder="Card name…">
+    <div style="display:flex">
+      <input type="text" id="mSet"   placeholder="Set (e.g. OGN)" style="flex:1;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid var(--border);border-right:1px solid var(--border);color:var(--text);font-size:.9rem;outline:none">
+      <input type="text" id="mNum"   placeholder="No. (e.g. 066)" style="flex:1;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);font-size:.9rem;outline:none">
+    </div>
+    <select id="mRarity" style="width:100%;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);font-size:.9rem;outline:none">
       <option>Common</option><option>Uncommon</option>
       <option>Rare</option><option>Legendary</option>
+    </select>
+    <select id="mVariant" style="width:100%;padding:11px 14px;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);font-size:.9rem;outline:none">
+      <option>Normal</option><option>Alternate Art</option>
+      <option>Signature</option><option>Overnumbered</option>
     </select>
     <div class="mfooter">
       <button class="btn btn-teal" style="font-size:.82rem" onclick="submitManual()">Add Card</button>
@@ -571,16 +578,71 @@ function runOCR(base64jpeg) {
 
 function parseCardText(raw) {
   var lines = raw.split("\n").map(function(l){ return l.trim(); }).filter(Boolean);
-  var name = "", set = "Riftbound", rarity = "Unknown";
+  var full  = raw.replace(/\n/g, " ");
+
+  var name = "", setCode = "", cardNum = "", variant = "Normal", rarity = "Unknown";
+
+  // ── Bottom-left stamp: "OGN • 066/298" or "OGN • 066a/298" or "OGN • 299*/298"
+  // OCR may render • as various chars, so we match loosely
+  var stampMatch = full.match(/\b([A-Z]{2,4})[^A-Za-z0-9]{1,3}(\d{1,4})(a?)(\/\*)?\s*\/\s*(\d{1,4})/);
+  if (stampMatch) {
+    setCode = stampMatch[1];
+    var num     = parseInt(stampMatch[2], 10);
+    var altSfx  = stampMatch[3];          // "a" for alternate art
+    var sigSfx  = stampMatch[4];          // "/*" OCR artifact for "*"
+    var total   = parseInt(stampMatch[5], 10);
+
+    // Signature: overnumbered with * (OCR may read * as various things)
+    // Also catch explicit * in a separate pass
+    var sigCheck = full.match(/\b(\d{3,4})\*\s*\/\s*\d/);
+    if (sigCheck) { variant = "Signature"; cardNum = sigCheck[1] + "*"; }
+    else if (num > total)  { variant = "Overnumbered"; cardNum = String(num); }
+    else if (altSfx === "a") { variant = "Alternate Art"; cardNum = num + "a"; }
+    else                     { variant = "Normal";        cardNum = String(num).padStart(3,"0"); }
+  }
+
+  // Fallback: just look for 3-letter set code anywhere
+  if (!setCode) {
+    var scMatch = full.match(/\b([A-Z]{3})\b/);
+    if (scMatch) setCode = scMatch[1];
+  }
+
+  // ── Rarity from emblem — OCR won't see color, but rarity words sometimes appear
+  // Champion Unit cards are always Legendary in Riftbound
+  if (/champion unit/i.test(full))       rarity = "Legendary";
+  else if (/\blegendary\b/i.test(full)) rarity = "Legendary";
+  else if (/\brave\b/i.test(full))      rarity = "Rare";
+  else if (/\buncommon\b/i.test(full))  rarity = "Uncommon";
+  else if (/\bcommon\b/i.test(full))    rarity = "Common";
+  // Signature cards are always Legendary rarity
+  if (variant === "Signature") rarity = "Legendary";
+
+  // ── Card name: the line that appears just above the italic subtype line
+  // Riftbound layout: TYPE LINE (caps) then NAME (title case) then SUBTYPE (italic/caps)
+  // Look for a short title-case or all-caps line that isn't all noise
+  var skipWords = /^(when|if|at|this|you|your|each|all|and|the|a|an|to|of|in|on|for|gain|give|draw|play|unit|champion|spell|landmark|equipment|fast|slow|burst|common|uncommon|rare|legendary|ionia|noxus|demacia|freljord|shadow|isles|piltover|zaun|shurima|targon|bilgewater|void|ixtal|bandle|remember|alluring)/i;
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
-    if (/^\d+$/.test(line) || line.length < 2 || /^[©®™]/.test(line)) continue;
-    var rm = line.match(/\b(common|uncommon|rare|legendary)\b/i);
-    if (rm) { rarity = rm[1].charAt(0).toUpperCase() + rm[1].slice(1).toLowerCase(); continue; }
-    if (/^[A-Z]{2,5}[-\u2013]?\d{0,4}$/.test(line)) { set = line; continue; }
-    if (!name && line.length >= 3 && /[A-Za-z]/.test(line)) name = line;
+    if (line.length < 2 || line.length > 40) continue;
+    if (/^[©®™•]/.test(line)) continue;
+    if (/^\d/.test(line)) continue;
+    if (skipWords.test(line)) continue;
+    // Must contain at least one letter, not be all-caps noise like "CHAMPION UNIT"
+    if (!/[a-z]/.test(line) && line.length > 12) continue;
+    // Looks like a name
+    if (!name && /[A-Za-z]/.test(line)) {
+      name = line.replace(/[^A-Za-z '\-]/g, "").trim();
+    }
   }
-  return { success: true, name: name, set: set, rarity: rarity };
+
+  return {
+    success: true,
+    name:    name,
+    set:     setCode || "Unknown",
+    cardNum: cardNum,
+    variant: variant,
+    rarity:  rarity
+  };
 }
 
 // ══════════════════════════════════════════════════════
@@ -708,7 +770,8 @@ function onDetect(res) {
   var rl = (res.rarity||"").toLowerCase();
   var isBatch = rl==="common"||rl==="uncommon"||rl==="";
 
-  pendingCF = { name:res.name, set:res.set||"Riftbound", rarity:res.rarity||"Unknown",
+  pendingCF = { name:res.name, set:res.set||"Unknown", rarity:res.rarity||"Unknown",
+                cardNum:res.cardNum||"", variant:res.variant||"Normal",
                 foil: isBatch ? foilMode : null };
 
   if (document.getElementById("sConfirm").checked) {
@@ -740,11 +803,17 @@ function showCF(askFoil) {
     '<div class="cf-sheet">'
     + '<div class="cf-title">Card Detected</div>'
     + '<div class="cf-fields">'
-    + '<input id="cfName" type="text" value="'+esc(c.name)+'" placeholder="Card name">'
+    + '<input id="cfName" type="text" value="'+esc(c.name)+'" placeholder="Card name" style="font-weight:700">'
     + '<div class="row2">'
-    + '<input id="cfSet" type="text" value="'+esc(c.set)+'" placeholder="Set">'
+    + '<input id="cfSet"    type="text" value="'+esc(c.set)+'"     placeholder="Set (e.g. OGN)" style="flex:1">'
+    + '<input id="cfNum"    type="text" value="'+esc(c.cardNum||"")+'" placeholder="No. (e.g. 066)" style="flex:1">'
+    + '</div>'
+    + '<div class="row2">'
     + '<select id="cfRar">'+["Common","Uncommon","Rare","Legendary","Unknown"].map(function(r){
         return '<option'+(r===c.rarity?' selected':'')+'>'+r+'</option>';
+      }).join("")+'</select>'
+    + '<select id="cfVar">'+["Normal","Alternate Art","Signature","Overnumbered"].map(function(v){
+        return '<option'+(v===(c.variant||"Normal")?' selected':'')+'>'+v+'</option>';
       }).join("")+'</select>'
     + '</div>'
     + foilHtml
@@ -769,12 +838,14 @@ function cfFoil(v) {
 }
 
 function cfOK() {
-  var name = document.getElementById("cfName").value.trim();
-  var set  = document.getElementById("cfSet").value.trim();
-  var rar  = document.getElementById("cfRar").value;
-  var foil = (pendingCF.foil !== null) ? pendingCF.foil : _cfFoil;
+  var name    = document.getElementById("cfName").value.trim();
+  var set     = document.getElementById("cfSet").value.trim();
+  var cardNum = document.getElementById("cfNum").value.trim();
+  var rar     = document.getElementById("cfRar").value;
+  var variant = document.getElementById("cfVar").value;
+  var foil    = (pendingCF.foil !== null) ? pendingCF.foil : _cfFoil;
   document.getElementById("cfOverlay").remove();
-  if (name) commit({ name:name, set:set, rarity:rar, foil:foil });
+  if (name) commit({ name:name, set:set, cardNum:cardNum, variant:variant, rarity:rar, foil:foil });
   resumeScan();
 }
 function cfSkip() {
@@ -787,7 +858,7 @@ function cfSkip() {
 // ══════════════════════════════════════════════════════
 function commit(card) {
   st("", '<span class="spinner"></span> Saving…');
-  apiGet({ action:"addCard", name:card.name, set:card.set||"Unknown", rarity:card.rarity||"Unknown", foil:card.foil?1:0 })
+  apiGet({ action:"addCard", name:card.name, set:card.set||"Unknown", cardNum:card.cardNum||"", variant:card.variant||"Normal", rarity:card.rarity||"Unknown", foil:card.foil?1:0 })
   .then(function(res) {
     if (!res.success) { toast("Not saved: " + (res.error||"unknown error"), "err"); return; }
     var lbl = res.action==="added" ? "Added" : "Updated";
@@ -809,12 +880,14 @@ function toggleManual() {
 }
 
 function submitManual() {
-  var name = document.getElementById("mName").value.trim();
-  var set  = document.getElementById("mSet").value.trim()||"Unknown";
-  var rar  = document.getElementById("mRarity").value;
+  var name    = document.getElementById("mName").value.trim();
+  var set     = document.getElementById("mSet").value.trim()||"Unknown";
+  var cardNum = document.getElementById("mNum").value.trim()||"";
+  var variant = document.getElementById("mVariant").value;
+  var rar     = document.getElementById("mRarity").value;
   if (!name) { toast("Enter a card name","err"); return; }
   var f = ["common","uncommon"].indexOf(rar.toLowerCase()) > -1 ? foilMode : false;
-  commit({ name:name, set:set, rarity:rar, foil:f });
+  commit({ name:name, set:set, cardNum:cardNum, variant:variant, rarity:rar, foil:f });
   document.getElementById("mName").value = "";
   toggleManual();
 }
@@ -832,10 +905,12 @@ function renderRecent() {
   var el = document.getElementById("recentList");
   if (!recentScans.length) { el.innerHTML='<div style="color:var(--muted);font-size:.82rem">No scans yet</div>'; return; }
   el.innerHTML = recentScans.map(function(c) {
+    var numStr = c.cardNum ? " · #"+c.cardNum : "";
+    var varStr = (c.variant && c.variant !== "Normal") ? " · "+c.variant : "";
     return '<div class="card-row">'
       +'<div class="dot '+(c.rarity||"Unknown")+'"></div>'
       +'<div class="cinfo"><div class="cname">'+esc(c.name)+'</div>'
-      +'<div class="cmeta">'+esc(c.set)+' · '+(c.rarity||"?")+' · ×'+c.qty+'</div></div>'
+      +'<div class="cmeta">'+esc(c.set)+numStr+varStr+' · '+(c.rarity||"?")+' · ×'+c.qty+'</div></div>'
       +'<div class="fbadge '+(c.foil?'foil':'nf')+'">'+(c.foil?'FOIL':'NRML')+'</div>'
       +'</div>';
   }).join("");
@@ -856,10 +931,12 @@ function renderInv(data) {
   if (!data.length) { el.innerHTML='<div class="inv-empty">No cards yet — start scanning!</div>';
     document.getElementById("invStats").style.display="none"; return; }
   el.innerHTML = data.map(function(c){
+    var numStr = c.cardNum ? " · #"+c.cardNum : "";
+    var varStr = (c.variant && c.variant !== "Normal") ? " · "+c.variant : "";
     return '<div class="inv-item">'
       +'<div class="dot '+(c.rarity||"Unknown")+'"></div>'
       +'<div class="iinfo"><div class="iname">'+esc(String(c.name))+'</div>'
-      +'<div class="imeta">'+esc(String(c.set))+' · '+(c.rarity||"?")+' · '+(c.foil==="Yes"?"Foil ✨":"Non-Foil")+'</div></div>'
+      +'<div class="imeta">'+esc(String(c.set))+numStr+varStr+' · '+(c.rarity||"?")+' · '+(c.foil==="Yes"?"Foil ✨":"Non-Foil")+'</div></div>'
       +'<div class="qty">'+c.qty+'</div>'
       +'</div>';
   }).join("");
