@@ -563,7 +563,7 @@ function runOCR(scanPayload) {
   if (!key) return Promise.resolve({ success: false, manualEntry: true });
 
   var payload = (typeof scanPayload === "string") ? { full: scanPayload } : (scanPayload || {});
-  var parts = ["full", "top", "bottom"].filter(function(k){ return !!payload[k]; });
+  var parts = ["full", "top", "name", "bottom"].filter(function(k){ return !!payload[k]; });
   if (!parts.length) return Promise.resolve({ success:false, error:"No image captured" });
 
   return fetch("https://vision.googleapis.com/v1/images:annotate?key=" + key, {
@@ -610,11 +610,11 @@ function canvasToJpegBase64(source, quality) {
   return source.toDataURL("image/jpeg", quality || .9).split(",")[1];
 }
 
-function cropCanvasToBase64(source, xPct, yPct, wPct, hPct, scale, quality, filter) {
-  var sx = Math.max(0, Math.round(source.width  * xPct));
-  var sy = Math.max(0, Math.round(source.height * yPct));
-  var sw = Math.min(source.width - sx,  Math.round(source.width  * wPct));
-  var sh = Math.min(source.height - sy, Math.round(source.height * hPct));
+function cropCanvasRectToBase64(source, sx, sy, sw, sh, scale, quality, filter) {
+  sx = Math.max(0, Math.round(sx));
+  sy = Math.max(0, Math.round(sy));
+  sw = Math.min(source.width - sx, Math.round(sw));
+  sh = Math.min(source.height - sy, Math.round(sh));
   var out = document.createElement("canvas");
   out.width  = Math.max(1, Math.round(sw * (scale || 1)));
   out.height = Math.max(1, Math.round(sh * (scale || 1)));
@@ -626,23 +626,105 @@ function cropCanvasToBase64(source, xPct, yPct, wPct, hPct, scale, quality, filt
   return canvasToJpegBase64(out, quality || .9);
 }
 
+function cropCanvasToBase64(source, xPct, yPct, wPct, hPct, scale, quality, filter) {
+  return cropCanvasRectToBase64(
+    source,
+    source.width * xPct,
+    source.height * yPct,
+    source.width * wPct,
+    source.height * hPct,
+    scale,
+    quality,
+    filter
+  );
+}
+
 function makeScanPayload(cardCanvas) {
+  var titleBand = findTitleBandRect(cardCanvas);
   return {
     full: canvasToJpegBase64(cardCanvas, .9),
     top: cropCanvasToBase64(cardCanvas, .02, .03, .96, .40, 2.1, .9, "contrast(135%) brightness(108%)"),
+    name: cropCanvasRectToBase64(cardCanvas, titleBand.x, titleBand.y, titleBand.w, titleBand.h, 2.8, .92, "contrast(160%) brightness(116%) saturate(115%)"),
     bottom: cropCanvasToBase64(cardCanvas, .02, .68, .96, .30, 3, .92, "contrast(170%) brightness(116%) saturate(75%)"),
     rarityHint: detectRarityFromCanvas(cardCanvas)
   };
 }
 
+function findTitleBandRect(cardCanvas) {
+  var w = cardCanvas.width;
+  var h = cardCanvas.height;
+  var probe = document.createElement("canvas");
+  probe.width = 160;
+  probe.height = 220;
+  var px = Math.round(w * .05);
+  var py = Math.round(h * .34);
+  var pw = Math.round(w * .90);
+  var ph = Math.round(h * .38);
+  var ctx = probe.getContext("2d");
+  ctx.drawImage(cardCanvas, px, py, pw, ph, 0, 0, probe.width, probe.height);
+
+  var data;
+  try {
+    data = ctx.getImageData(0, 0, probe.width, probe.height).data;
+  } catch(e) {
+    return fallbackTitleBandRect(w, h);
+  }
+
+  var bestY = -1;
+  var bestScore = 0;
+  for (var y = 0; y < probe.height; y += 2) {
+    var score = 0;
+    for (var x = 0; x < probe.width; x += 3) {
+      var i = (y * probe.width + x) * 4;
+      if (isTitleBandPixel(data[i], data[i+1], data[i+2])) score++;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestY = y;
+    }
+  }
+
+  if (bestY < 0 || bestScore < 12) return fallbackTitleBandRect(w, h);
+
+  var bandCenterY = py + (bestY / probe.height) * ph;
+  var cropH = h * .22;
+  var cropY = Math.max(h * .36, Math.min(h * .62, bandCenterY - cropH * .46));
+  return {
+    x: w * .04,
+    y: cropY,
+    w: w * .92,
+    h: cropH
+  };
+}
+
+function fallbackTitleBandRect(w, h) {
+  return {
+    x: w * .04,
+    y: h * .44,
+    w: w * .92,
+    h: h * .24
+  };
+}
+
+function isTitleBandPixel(r, g, b) {
+  var hsv = rgbToHsv(r, g, b);
+  if (hsv.s < .34 || hsv.v < .24) return false;
+  return (hsv.h >= 76 && hsv.h <= 168) ||      // green
+         (hsv.h >= 180 && hsv.h <= 252) ||     // blue
+         (hsv.h >= 258 && hsv.h <= 326) ||     // purple
+         (hsv.h >= 12 && hsv.h < 45) ||        // orange
+         (hsv.h >= 45 && hsv.h <= 74) ||       // yellow
+         (hsv.h <= 10 || hsv.h >= 344);        // red
+}
+
 function detectRarityFromCanvas(cardCanvas) {
   var sample = document.createElement("canvas");
-  sample.width = 160;
-  sample.height = 110;
-  var sx = Math.round(cardCanvas.width * .41);
-  var sy = Math.round(cardCanvas.height * .88);
-  var sw = Math.round(cardCanvas.width * .18);
-  var sh = Math.round(cardCanvas.height * .10);
+  sample.width = 220;
+  sample.height = 140;
+  var sx = Math.round(cardCanvas.width * .34);
+  var sy = Math.round(cardCanvas.height * .82);
+  var sw = Math.round(cardCanvas.width * .32);
+  var sh = Math.round(cardCanvas.height * .17);
   var ctx = sample.getContext("2d");
   ctx.drawImage(cardCanvas, sx, sy, sw, sh, 0, 0, sample.width, sample.height);
 
@@ -655,8 +737,8 @@ function detectRarityFromCanvas(cardCanvas) {
 
   var score = { Common:0, Uncommon:0, Rare:0, Epic:0, Showcase:0 };
   var hits = { Common:0, Uncommon:0, Rare:0, Epic:0, Showcase:0 };
-  var centerX = sample.width / 2;
-  var centerY = sample.height * .62;
+  var centerX = .50;
+  var centerY = .78;
 
   for (var y = 0; y < sample.height; y += 2) {
     for (var x = 0; x < sample.width; x += 2) {
@@ -668,23 +750,34 @@ function detectRarityFromCanvas(cardCanvas) {
       var rarity = rarityPixelClass(r, g, b);
       if (!rarity) continue;
 
-      var dx = Math.abs(x - centerX) / centerX;
-      var dy = Math.abs(y - centerY) / centerY;
-      var weight = Math.max(.2, 1 - (dx * .62 + dy * .38));
+      var rx = x / sample.width;
+      var ry = y / sample.height;
+      var nx = (rx - centerX) / .34;
+      var ny = (ry - centerY) / .30;
+      var distance = Math.sqrt(nx * nx + ny * ny);
+      if (distance > 1) continue;
+
+      var weight = 1 - distance;
+      if (rarity === "Common" && (Math.abs(rx - centerX) > .13 || Math.abs(ry - centerY) > .20)) {
+        continue;
+      }
       score[rarity] += weight;
       hits[rarity]++;
     }
   }
 
-  var ranked = ["Common", "Uncommon", "Rare", "Epic", "Showcase"].map(function(name) {
+  var ranked = ["Uncommon", "Rare", "Epic", "Showcase"].map(function(name) {
     return { name:name, value:score[name], hits:hits[name] };
   }).sort(function(a,b){ return b.value - a.value; });
 
-  if (ranked[0].value < 5 || ranked[0].hits < 4) return "";
-  if (ranked[1] && ranked[1].value > 0 && ranked[0].value < ranked[1].value * 1.18) {
-    return "";
+  if (ranked[0].value >= 4.5 && ranked[0].hits >= 8) {
+    if (!ranked[1] || ranked[1].value === 0 || ranked[0].value >= ranked[1].value * 1.12) {
+      return ranked[0].name;
+    }
   }
-  return ranked[0].name;
+
+  if (score.Common >= 4.5 && hits.Common >= 8) return "Common";
+  return "";
 }
 
 function rarityPixelClass(r, g, b) {
@@ -728,9 +821,10 @@ function rgbToHsv(r, g, b) {
 
 function parseCardText(rawInput, visualRarity) {
   var rawObj = (typeof rawInput === "string") ? { full: rawInput } : (rawInput || {});
-  var raw = [rawObj.full, rawObj.top, rawObj.bottom].filter(Boolean).join("\n");
+  var raw = [rawObj.full, rawObj.top, rawObj.name, rawObj.bottom].filter(Boolean).join("\n");
   var lines = cleanLines(raw);
   var topLines = cleanLines(rawObj.top || "");
+  var nameLines = cleanLines(rawObj.name || "");
   var bottomLines = cleanLines(rawObj.bottom || "");
   var full  = normalizeOCR(raw).replace(/\n/g, " ");
 
@@ -753,8 +847,8 @@ function parseCardText(rawInput, visualRarity) {
   // ── Rarity from the bottom-center symbol first, then text as a fallback.
   rarity = visualRarity || rarityFromText(full) || "Unknown";
 
-  // ── Card name: prefer the top crop, then fall back to the full OCR text.
-  name = findCardName(topLines, lines);
+  // ── Card name: trust the colored center title banner before any whole-card text.
+  name = findCardName(nameLines, topLines, lines);
 
   return {
     success: true,
@@ -864,10 +958,17 @@ function rarityFromText(text) {
   return "";
 }
 
-function findCardName(topLines, allLines) {
+function findCardName(nameLines, topLines, allLines) {
   var candidates = [];
-  collectNameCandidates(topLines, 8, candidates);
-  collectNameCandidates(allLines, 2, candidates);
+  collectNameCandidates(nameLines, 12, candidates);
+  candidates.sort(function(a,b){ return b.score - a.score; });
+  if (candidates.length) return candidates[0].name;
+
+  collectNameCandidates(topLines, 5, candidates);
+  candidates.sort(function(a,b){ return b.score - a.score; });
+  if (candidates.length) return candidates[0].name;
+
+  collectNameCandidates(allLines, 0, candidates);
   candidates.sort(function(a,b){ return b.score - a.score; });
   return candidates.length ? candidates[0].name : "";
 }
@@ -875,21 +976,36 @@ function findCardName(topLines, allLines) {
 function collectNameCandidates(lines, baseScore, out) {
   var seen = {};
   for (var i = 0; i < lines.length; i++) {
-    var name = cleanNameLine(lines[i]);
-    if (!isNameCandidate(name)) continue;
-    var key = name.toLowerCase();
-    if (seen[key]) continue;
-    seen[key] = true;
+    if (/^["“”]/.test(String(lines[i]).trim())) continue;
+    var rawName = cleanNameLine(lines[i]);
+    var variants = [rawName, stripTitleLineNoise(rawName)];
 
-    var score = baseScore + Math.max(0, 6 - i) * .35;
-    if (i > 0 && isTypeLine(lines[i - 1])) score += 2.8;
-    if (/[A-Z][a-z]/.test(name)) score += 2.5;
-    if (/^[A-Z0-9 ,'\-]+$/.test(name) && name.length <= 16) score += 1.2;
-    if (/\s/.test(name)) score += .8;
-    if (/['\-]/.test(name)) score += .4;
-    if (/^[a-z]/.test(name)) score -= 3;
-    out.push({ name:name, score:score });
+    for (var j = 0; j < variants.length; j++) {
+      var name = cleanNameLine(variants[j]);
+      if (!isNameCandidate(name)) continue;
+      var key = name;
+      if (seen[key]) continue;
+      seen[key] = true;
+
+      var score = baseScore + Math.max(0, 6 - i) * .35;
+      if (i > 0 && isTypeLine(lines[i - 1])) score += 2.8;
+      if (j > 0) score += 1.1;
+      if (/[A-Z][a-z]/.test(name)) score += 2.5;
+      if (/^[A-Z0-9 ,'\-]+$/.test(name) && name.length <= 16) score += .4;
+      if (/^[A-Z0-9'\-]+$/.test(name) && name.length <= 12) score -= .9;
+      if (/\s/.test(name)) score += .8;
+      if (/['\-]/.test(name)) score += .4;
+      if (/^[a-z]/.test(name)) score -= 3;
+      out.push({ name:name, score:score });
+    }
   }
+}
+
+function stripTitleLineNoise(line) {
+  var out = String(line || "");
+  out = out.replace(/^(champion unit|unit|spell|landmark|equipment|gear|token|origin|fast|slow|burst)\b/i, " ");
+  out = out.replace(/\b(ionia|noxus|demacia|freljord|shadow isles|piltover|zaun|shurima|targon|mount targon|bilgewater|void|ixtal|bandle|runeterra)\b/ig, " ");
+  return out.replace(/\s+/g, " ").trim();
 }
 
 function cleanNameLine(line) {
@@ -907,9 +1023,10 @@ function isNameCandidate(line) {
   if (/\d{2,}|\/|#|©|®|™|:/.test(line)) return false;
   if (/^[.,'\- ]+$/.test(line)) return false;
   if (isTypeLine(line)) return false;
+  if (/^(champion unit|unit|spell|landmark|equipment|gear|token|origin|fast|slow|burst)\b/i.test(line)) return false;
   if (/^(common|uncommon|rare|epic|showcase|legendary)$/i.test(line)) return false;
   if (/^(ionia|noxus|demacia|freljord|shadow isles|piltover|zaun|shurima|targon|bilgewater|void|ixtal|bandle)$/i.test(line)) return false;
-  if (/^(when|if|at|this|you|your|each|gain|give|draw|play|summon|attack|block|deal|discard|create|choose|remember)\b/i.test(line)) return false;
+  if (/^(when|if|at|this|that|the|a|an|you|your|each|gain|give|draw|play|summon|attack|block|deal|discard|create|choose|remember|feel|ironic|omens|ambush|reaction|assault|may|while|score|stunned|enemy)\b/i.test(line)) return false;
   if (/[.!?]$/.test(line)) return false;
   return true;
 }
